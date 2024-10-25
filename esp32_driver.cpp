@@ -25,7 +25,7 @@ PID pid7(&input7, &output7, &setpoint7, Kp7, Ki7, Kd7, DIRECT);
 // Pin Assignments
 const int MOTOR1_PWM = 33;
 const int MOTOR2_PWM = 32;
-const int MOTOR3_PWM = 21, MOTOR3_IN1 = 14, MOTOR3_IN2 = 27; //Change 21 to 27 for ESP32 Dev
+const int MOTOR3_PWM = 13, MOTOR3_IN1 = 14, MOTOR3_IN2 = 27; //Change 21 to 27 for ESP32 Dev
 const int MOTOR4_IN1 = 26, MOTOR4_IN2 = 25;
 const int MOTOR5_PWM = 23;
 const int MOTOR6_PWM = 22;
@@ -75,6 +75,8 @@ float mapFloat(float x, float in_min, float in_max, float out_min, float out_max
 }
 void setup() {
   Serial.begin(115200);
+  Serial.println(MAX_DUTY_CYCLE);
+  delay(3000);
 
   // Attach Servo Motors and Initialize LEDC
   ledcSetup(PWM_CHANNEL_1, PWM_FREQ, PWM_RESOLUTION);
@@ -112,7 +114,7 @@ void setup() {
   pinMode(MOTOR4_IN1, OUTPUT);
   pinMode(MOTOR4_IN2, OUTPUT);
 
-  pinMode(MOTOR7_PWM, OUTPUT);
+  // pinMode(MOTOR7_PWM, OUTPUT);
   pinMode(MOTOR7_IN1, OUTPUT);
   pinMode(MOTOR7_IN2, OUTPUT);
 
@@ -132,7 +134,9 @@ void setup() {
 
   // Initialize PID Controllers
   pid3.SetMode(AUTOMATIC);
+  pid3.SetOutputLimits(-MAX_DUTY_CYCLE, MAX_DUTY_CYCLE);
   pid7.SetMode(AUTOMATIC);
+  pid7.SetOutputLimits(-MAX_DUTY_CYCLE, MAX_DUTY_CYCLE);
 }
 
 
@@ -145,19 +149,26 @@ void loop() {
   // Update PID Control for Motors 3 and 7
   input3 = encoder_count_3;
   pid3.Compute();
+  // output3 = constrain(output3, -MAX_DUTY_CYCLE, MAX_DUTY_CYCLE);
+  Serial.println(output3);
+  Serial.println(setpoint3);
   setMotorDirection(MOTOR3_IN1, MOTOR3_IN2, output3);
-  ledcWrite(MOTOR3_PWM, abs(output3)); // Use ledcWrite for ESP32 PWM
+  ledcWrite(PWM_CHANNEL_3, abs(output3)); // Use ledcWrite for ESP32 PWM
+
 
   input7 = encoder_count_7;
   pid7.Compute();
+  Serial.println(output3);
+  Serial.println(setpoint3);
   setMotorDirection(MOTOR7_IN1, MOTOR7_IN2, output7);
+  ledcWrite(PWM_CHANNEL_7, abs(output7));
   // ledcWrite(MOTOR7_PWM, abs(output7)); // Use ledcWrite for ESP32 PWM
 
   // Send joint positions to Raspberry Pi
   sendJointPositions();
 
   // Add a small delay to avoid WDT reset
-  delay(200); // Adjust as necessary
+  delay(100); // Adjust as necessary
 }
 
 void processCommand(String command) {
@@ -170,11 +181,11 @@ void processCommand(String command) {
 
     // if (motor == 3) pid3.SetTunings(p, i, d);
     // if (motor == 7) pid7.SetTunings(p, i, d);
-        if (motor == 3) {
-        pid3.SetTunings(p, i, d);
-        // Serial.print("Motor 3 PID updated: P = "); Serial.print(p);
-        // Serial.print(", I = "); Serial.print(i);
-        // Serial.print(", D = "); Serial.println(d);
+    if (motor == 3) {
+      pid3.SetTunings(p, i, d);
+      // Serial.print("Motor 3 PID updated: P = "); Serial.print(p);
+      // Serial.print(", I = "); Serial.print(i);
+      // Serial.print(", D = "); Serial.println(d);
     }
     if (motor == 7) {
         pid7.SetTunings(p, i, d);
@@ -215,6 +226,8 @@ void processCommand(String command) {
     ledcWrite(PWM_CHANNEL_6, dutyCycle6);
   
     // Set DC Motor 4 and 8 directions
+    setpoint3 = values[2].toFloat();
+    setpoint7 = values[6].toFloat();
     setMotorDirection(MOTOR4_IN1, MOTOR4_IN2, values[3].toInt());
     setMotorDirection(MOTOR8_IN1, MOTOR8_IN2, values[7].toInt());
   }
