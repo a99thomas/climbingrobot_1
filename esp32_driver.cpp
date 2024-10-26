@@ -7,22 +7,23 @@
 // Servo Motors
 Servo motor1, motor2, motor5, motor6;
 
-// Motor 3 and 7 Encoder Counts
-volatile long encoder_count_3 = 0;
-volatile long encoder_count_7 = 0;
-
 // PID Control Variables for Motors 3 and 7
 double setpoint3, input3, output3;
 double setpoint7, input7, output7;
 
-double Kp3 = 1.0, Ki3 = 0.0, Kd3 = 0.0;
-double Kp7 = 1.0, Ki7 = 0.0, Kd7 = 0.0;
+double Kp3a = 50.0, Ki3a = 0.00, Kd3a = 5.0;
+double Kp3b = 25.0, Ki3b = 2., Kd3b = 6.0;
+double Kp7a = 50.0, Ki7a = 0.00, Kd7a = 5.0;
+double Kp7b = 25.0, Ki7b = 2., Kd7b = 6.0;
 
-PID pid3(&input3, &output3, &setpoint3, Kp3, Ki3, Kd3, DIRECT);
-PID pid7(&input7, &output7, &setpoint7, Kp7, Ki7, Kd7, DIRECT);
+PID pid3(&input3, &output3, &setpoint3, Kp3a, Ki3a, Kd3a, DIRECT);
+PID pid7(&input7, &output7, &setpoint7, Kp7a, Ki7a, Kd7a, DIRECT);
 
 
 // Pin Assignments
+const double PITCH = 0.003;   //m
+const int GEARING = 3171;  //PPR
+const double PULSETOMET = 1/(PITCH/GEARING); //105700
 const int MOTOR1_PWM = 33;
 const int MOTOR2_PWM = 32;
 const int MOTOR3_PWM = 13, MOTOR3_IN1 = 14, MOTOR3_IN2 = 27; //Change 21 to 27 for ESP32 Dev
@@ -32,8 +33,8 @@ const int MOTOR6_PWM = 22;
 const int MOTOR7_PWM = 12, MOTOR7_IN1 = 18, MOTOR7_IN2 = 19;
 const int MOTOR8_IN1 = 17, MOTOR8_IN2 = 5;
 
-const int MOTOR3_CHA = 16, MOTOR3_CHB = 2;
-const int MOTOR7_CHA = 4, MOTOR7_CHB = 5;
+const int MOTOR3_CHA = 16, MOTOR3_CHB = 4;
+const int MOTOR7_CHA = 2, MOTOR7_CHB = 15;
 
 
 const int PWM_FREQ = 50; // 50 Hz for servos
@@ -56,14 +57,51 @@ const int PERIOD_MICROSECONDS = 1000000/PWM_FREQ; // 20ms for 50Hz
 const int MIN_DUTY_CYCLE = MAX_DUTY_CYCLE*MIN_PWM_WIDTH/PERIOD_MICROSECONDS; // Minimum pulse width in microseconds
 const int FULL_DUTY_CYCLE = MAX_DUTY_CYCLE*MAX_PWM_WIDTH/PERIOD_MICROSECONDS; // Maximum pulse width in microseconds
 
+volatile double m3_count = 0;         // Raw encoder count
+int protectedCount3 = 0;          // Safe copy of count for main loop
+int previousCount3 = 0;           // Track previous count for change detection
 
-void IRAM_ATTR encoder_isr_3() {
-  encoder_count_3 += (digitalRead(MOTOR3_CHA) == digitalRead(MOTOR3_CHB)) ? 1 : -1;
+volatile double m7_count = 0;         // Raw encoder count for motor 7
+int protectedCount7 = 0;           // Safe copy of count for main loop
+int previousCount7 = 0;            // Track previous count for change detection
+
+#define read3A bitRead(GPIO.in, MOTOR3_CHA)  // Faster than digitalRead()
+#define read3B bitRead(GPIO.in, MOTOR3_CHB)  // Faster than digitalRead()
+
+#define read7A bitRead(GPIO.in, MOTOR7_CHA)  // Faster than digitalRead()
+#define read7B bitRead(GPIO.in, MOTOR7_CHB)  // Faster than digitalRead()
+
+void isr3A() {
+  if(read3B != read3A) {
+    m3_count ++;
+  } else {
+    m3_count --;
+  }
+}
+void isr3B() {
+  if (read3A == read3B) {
+    m3_count ++;
+  } else {
+    m3_count --;
+  }
 }
 
-void IRAM_ATTR encoder_isr_7() {
-  encoder_count_7 += (digitalRead(MOTOR7_CHA) == digitalRead(MOTOR7_CHB)) ? 1 : -1;
+void isr7A() {
+  if(read7B != read7A) {
+    m7_count ++;
+  } else {
+    m7_count --;
+  }
 }
+void isr7B() {
+  if (read7A == read7B) {
+    m7_count ++;
+  } else {
+    m7_count --;
+  }
+}
+
+
 
 // Function prototypes
 void processCommand(String command);
@@ -76,7 +114,7 @@ float mapFloat(float x, float in_min, float in_max, float out_min, float out_max
 void setup() {
   Serial.begin(115200);
   Serial.println(MAX_DUTY_CYCLE);
-  delay(3000);
+  delay(1000);
 
   // Attach Servo Motors and Initialize LEDC
   ledcSetup(PWM_CHANNEL_1, PWM_FREQ, PWM_RESOLUTION);
@@ -126,10 +164,13 @@ void setup() {
   pinMode(MOTOR3_CHB, INPUT);
   pinMode(MOTOR7_CHA, INPUT);
   pinMode(MOTOR7_CHB, INPUT);
-
   // Attach Interrupts for Encoders
-  attachInterrupt(digitalPinToInterrupt(MOTOR3_CHA), encoder_isr_3, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(MOTOR7_CHA), encoder_isr_7, CHANGE);
+  // attachInterrupt(digitalPinToInterrupt(MOTOR3_CHA), encoder_isr_3, CHANGE);
+  // attachInterrupt(digitalPinToInterrupt(MOTOR3_CHB), encoder_isr_3, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(MOTOR3_CHA), isr3A, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(MOTOR3_CHB), isr3B, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(MOTOR7_CHA), isr7A, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(MOTOR7_CHB), isr7B, CHANGE);
 
 
   // Initialize PID Controllers
@@ -145,21 +186,31 @@ void loop() {
     String command = Serial.readStringUntil('\n');
     processCommand(command);
   }
+  Serial.println(PULSETOMET);
 
   // Update PID Control for Motors 3 and 7
-  input3 = encoder_count_3;
+  if (abs(input3 - setpoint3) < 150) {
+      pid3.SetTunings(Kp3b, Ki3b, Kd3b);
+  }
+  else if (abs(input3 - setpoint3) > 150){
+      pid3.SetTunings(Kp3a, Ki3a, Kd3a);
+  }
+  if (abs(input7 - setpoint7) < 150) {
+      pid3.SetTunings(Kp7b, Ki7b, Kd7b);
+  }
+  else if (abs(input7 - setpoint7) > 150){
+      pid3.SetTunings(Kp7a, Ki7a, Kd7a);
+  }
+
+  
+  input3 = m3_count;
   pid3.Compute();
-  // output3 = constrain(output3, -MAX_DUTY_CYCLE, MAX_DUTY_CYCLE);
-  Serial.println(output3);
-  Serial.println(setpoint3);
   setMotorDirection(MOTOR3_IN1, MOTOR3_IN2, output3);
   ledcWrite(PWM_CHANNEL_3, abs(output3)); // Use ledcWrite for ESP32 PWM
 
 
-  input7 = encoder_count_7;
+  input7 = m7_count;
   pid7.Compute();
-  Serial.println(output3);
-  Serial.println(setpoint3);
   setMotorDirection(MOTOR7_IN1, MOTOR7_IN2, output7);
   ledcWrite(PWM_CHANNEL_7, abs(output7));
   // ledcWrite(MOTOR7_PWM, abs(output7)); // Use ledcWrite for ESP32 PWM
@@ -168,32 +219,38 @@ void loop() {
   sendJointPositions();
 
   // Add a small delay to avoid WDT reset
-  delay(100); // Adjust as necessary
+  delay(10); // Adjust as necessary
 }
 
 void processCommand(String command) {
   //PID commands look like "PID<motor_number>,<Kp_value>,<Ki_value>,<Kd_value>"
-  if (command.startsWith("PID")) {
-    int motor = command.substring(3, 4).toInt();
-    double p = command.substring(5, command.indexOf(',', 5)).toDouble();
-    double i = command.substring(command.indexOf(',', 5) + 1, command.lastIndexOf(',')).toDouble();
-    double d = command.substring(command.lastIndexOf(',') + 1).toDouble();
-
-    // if (motor == 3) pid3.SetTunings(p, i, d);
-    // if (motor == 7) pid7.SetTunings(p, i, d);
-    if (motor == 3) {
-      pid3.SetTunings(p, i, d);
-      // Serial.print("Motor 3 PID updated: P = "); Serial.print(p);
-      // Serial.print(", I = "); Serial.print(i);
-      // Serial.print(", D = "); Serial.println(d);
+  if (command.startsWith("PIDa")) {
+    int motor = command.substring(4, 5).toInt();
+    if (motor = 3){
+      double Kp3a = command.substring(6, command.indexOf(',', 6)).toDouble();
+      double Ki3a = command.substring(command.indexOf(',', 6) + 1, command.lastIndexOf(',')).toDouble();
+      double Kd3a = command.substring(command.lastIndexOf(',') + 1).toDouble();
     }
-    if (motor == 7) {
-        pid7.SetTunings(p, i, d);
-        // Serial.print("Motor 7 PID updated: P = "); Serial.print(p);
-        // Serial.print(", I = "); Serial.print(i);
-        // Serial.print(", D = "); Serial.println(d);
+    if (motor = 7){
+      double Kp7a = command.substring(7, command.indexOf(',', 6)).toDouble();
+      double Ki7a = command.substring(command.indexOf(',', 6) + 1, command.lastIndexOf(',')).toDouble();
+      double Kd7a = command.substring(command.lastIndexOf(',') + 1).toDouble();
     }
-  } else {
+  }
+  else if (command.startsWith("PIDb")) {
+    int motor = command.substring(4, 5).toInt();
+    if (motor = 3){
+      double Kp3b = command.substring(6, command.indexOf(',', 6)).toDouble();
+      double Ki3b = command.substring(command.indexOf(',', 6) + 1, command.lastIndexOf(',')).toDouble();
+      double Kd3b = command.substring(command.lastIndexOf(',') + 1).toDouble();
+    }
+    if (motor==7){
+      double Kp7b = command.substring(7, command.indexOf(',', 6)).toDouble();
+      double Ki7b = command.substring(command.indexOf(',', 6) + 1, command.lastIndexOf(',')).toDouble();
+      double Kd7b = command.substring(command.lastIndexOf(',') + 1).toDouble();
+    }
+  }
+  else {
     String values[8];
     int motor = 0;
     int startIndex = 0;
@@ -202,11 +259,8 @@ void processCommand(String command) {
       values[i] = command.substring(startIndex, endIndex);
       startIndex = endIndex + 1;
     }
-    // Serial.println(values[0].toInt());
-    //     for (int i = 0; i < 8; i++) {
-    //   Serial.print("Value "); Serial.print(i); Serial.print(": "); Serial.println(values[i]);
-    // }
-    // Map angle to pulse width
+    
+    
     // Convert angles to pulse widths
     int pulseWidth1 = mapFloat(values[0].toFloat(), MIN_SERVO_ANGLE, MAX_SERVO_ANGLE, MIN_PWM_WIDTH, MAX_PWM_WIDTH);
     int pulseWidth2 = mapFloat(values[1].toFloat(), MIN_SERVO_ANGLE, MAX_SERVO_ANGLE, MIN_PWM_WIDTH, MAX_PWM_WIDTH);
@@ -226,8 +280,8 @@ void processCommand(String command) {
     ledcWrite(PWM_CHANNEL_6, dutyCycle6);
   
     // Set DC Motor 4 and 8 directions
-    setpoint3 = values[2].toFloat();
-    setpoint7 = values[6].toFloat();
+    setpoint3 = values[2].toDouble()*PULSETOMET;
+    setpoint7 = values[6].toDouble()*PULSETOMET;
     setMotorDirection(MOTOR4_IN1, MOTOR4_IN2, values[3].toInt());
     setMotorDirection(MOTOR8_IN1, MOTOR8_IN2, values[7].toInt());
   }
@@ -239,11 +293,14 @@ void setMotorDirection(int in1, int in2, int speed) {
 }
 
 void sendJointPositions() {
+  double m3_pos = m3_count/PULSETOMET;
+  double m7_pos = m7_count/PULSETOMET;
+  Serial.println(m3_pos,5);
   String positions = String(mapFloat(ledcRead(PWM_CHANNEL_1), MIN_DUTY_CYCLE, FULL_DUTY_CYCLE, 0.0, 270.0)) + ","
                        + String(mapFloat(ledcRead(PWM_CHANNEL_2), MIN_DUTY_CYCLE, FULL_DUTY_CYCLE, 0.0, 270.0)) + ","
-                       + String(encoder_count_3) + ",0,"
+                       + String(m3_pos) + ",0,"
                        + String(mapFloat(ledcRead(PWM_CHANNEL_5), MIN_DUTY_CYCLE, FULL_DUTY_CYCLE, 0.0, 270.0)) + ","
                        + String(mapFloat(ledcRead(PWM_CHANNEL_6), MIN_DUTY_CYCLE, FULL_DUTY_CYCLE, 0.0, 270.0)) + ","
-                       + String(encoder_count_7) + ",0\n";
+                       + String(m7_pos) + ",0\n";
   Serial.print(positions);
 }
