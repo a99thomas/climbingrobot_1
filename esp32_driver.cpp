@@ -289,7 +289,7 @@ void sendJointPositions() {
   // Serial.println(m3_pos,5);
   String positions = String(mapFloat(ledcRead(PWM_CHANNEL_1), MIN_DUTY_CYCLE, FULL_DUTY_CYCLE, 0.0, 270.0), 4) + ","
                        + String(mapFloat(ledcRead(PWM_CHANNEL_2), MIN_DUTY_CYCLE, FULL_DUTY_CYCLE, 0.0, 270.0), 4) + ","
-                       + String(m3_count, 4) + ",0,"
+                       + String(m3_pos, 4) + ",0,"
                        + String(mapFloat(ledcRead(PWM_CHANNEL_5), MIN_DUTY_CYCLE, FULL_DUTY_CYCLE, 0.0, 270.0), 4) + ","
                        + String(mapFloat(ledcRead(PWM_CHANNEL_6), MIN_DUTY_CYCLE, FULL_DUTY_CYCLE, 0.0, 270.0), 4) + ","
                        + String(m7_pos, 4) + ",0\n";
